@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UCL Ultimate Tournament 3D</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000428; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; touch-action: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .ucl-gradient { background: linear-gradient(135deg, #000428 0%, #004e92 100%); }
+        .ucl-border { border: 2px solid #d4af37; }
+        .btn { pointer-events: auto; cursor: pointer; transition: all 0.2s; }
+        .btn:hover { transform: scale(1.05); }
+        .btn:active { transform: scale(0.95); opacity: 0.8; }
+        #joystick-container { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto; }
+        #joystick-knob { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: #d4af37; border-radius: 50%; box-shadow: 0 0 15px #d4af37; }
+        #shoot-btn { position: absolute; bottom: 60px; right: 40px; width: 80px; height: 80px; background: #d4af37; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #000428; pointer-events: auto; user-select: none; -webkit-tap-highlight-color: transparent; }
+        .hidden { display: none !important; }
+        #tournament-ui { pointer-events: auto; max-height: 80vh; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; color: white; font-size: 0.8rem; }
+        th, td { padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .highlight { color: #d4af37; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <!-- Menu Utama -->
+    <div id="main-menu" class="absolute inset-0 flex flex-col items-center justify-center ucl-gradient text-white z-50">
+        <h1 class="text-5xl font-black italic mb-2 tracking-tighter">CHAMPIONS</h1>
+        <h2 class="text-xl text-yellow-500 mb-8 tracking-widest uppercase">League Tournament</h2>
+        <button id="start-btn" class="btn px-12 py-4 bg-yellow-500 text-blue-900 font-bold rounded-full text-xl shadow-lg">MULAI TURNAMEN</button>
+        <button id="reset-btn" class="btn mt-4 text-sm opacity-60">Reset Progres</button>
+    </div>
+
+    <!-- UI Turnamen -->
+    <div id="tournament-ui" class="absolute inset-x-4 top-10 mx-auto max-w-4xl ucl-gradient p-6 rounded-xl ucl-border text-white hidden z-40 shadow-2xl">
+        <div id="tournament-content"></div>
+        <div class="mt-6 flex justify-center">
+            <button id="play-match-btn" class="btn px-8 py-3 bg-yellow-500 text-blue-900 font-bold rounded-full">MAIN PERTANDINGAN BERIKUTNYA</button>
+        </div>
+    </div>
+
+    <!-- HUD Game -->
+    <div id="game-hud" class="absolute top-5 inset-x-0 flex justify-center items-start hidden">
+        <div class="ucl-gradient px-6 py-2 rounded-full ucl-border flex items-center gap-8 shadow-xl text-white">
+            <div class="text-center">
+                <div id="team-a-name" class="text-xs uppercase opacity-70">TIM ANDA</div>
+                <div id="score-a" class="text-2xl font-bold">0</div>
+            </div>
+            <div class="text-xl font-black text-yellow-500 italic">VS</div>
+            <div class="text-center">
+                <div id="team-b-name" class="text-xs uppercase opacity-70">AI</div>
+                <div id="score-b" class="text-2xl font-bold">0</div>
+            </div>
+            <div class="ml-4 border-l border-white/20 pl-4">
+                <div id="game-timer" class="text-lg font-mono">00:45</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Kontrol Mobile -->
+    <div id="mobile-controls" class="hidden">
+        <div id="joystick-container"><div id="joystick-knob"></div></div>
+        <div id="shoot-btn" class="btn shadow-2xl">SHOOT</div>
+    </div>
+
+    <!-- Overlay Akhir Match -->
+    <div id="match-end-overlay" class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white hidden z-50">
+        <h2 class="text-4xl font-bold mb-2">WAKTU HABIS</h2>
+        <p id="match-result-text" class="text-xl mb-8"></p>
+        <button id="back-to-tournament-btn" class="btn px-8 py-3 bg-yellow-500 text-blue-900 font-bold rounded-full">KEMBALI KE TURNAMEN</button>
+    </div>
+</div>
+
+<script>
+/** * DATA & STATE 
+ */
+const TEAMS = [
+    "Real Madrid", "Man City", "Bayern", "PSG", "Liverpool", "Inter", "Barcelona", "Arsenal",
+    "Dortmund", "Atletico", "AC Milan", "Napoli", "Benfica", "Porto", "Ajax", "Leipzig",
+    "Juventus", "Chelsea", "Man Utd", "Leverkusen", "Lazio", "PSV", "Feyenoord", "Marseille",
+    "Celtic", "Galatasaray", "Shakhtar", "Salzburg", "Crvena Zvezda", "Young Boys", "Antwerp", "Lens"
+];
+
+let gameState = {
+    phase: 'GROUP',
+    groups: [],
+    playerTeam: "Real Madrid",
+    knockout: { quarter: [], semi: [], final: [] }
+};
+
+/** * LOGIKA TURNAMEN 
+ */
+function initTournament() {
+    const saved = localStorage.getItem('ucl_tournament_save');
+    if (saved) { gameState = JSON.parse(saved); return; }
+
+    const shuffled = [...TEAMS].sort(() => Math.random() - 0.5);
+    gameState.groups = [];
+    for (let i = 0; i < 8; i++) {
+        const groupTeams = shuffled.slice(i * 4, i * 4 + 4).map(name => ({
+            name, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0
+        }));
+        gameState.groups.push({ letter: String.fromCharCode(65 + i), teams: groupTeams });
+    }
+    saveGame();
+}
+
+function saveGame() { localStorage.setItem('ucl_tournament_save', JSON.stringify(gameState)); }
+
+function renderTournamentUI() {
+    const container = document.getElementById('tournament-content');
+    let html = '';
+
+    if (gameState.phase === 'GROUP') {
+        html = '<h2 class="text-2xl font-bold mb-4 text-center">FASE GRUP</h2><div class="grid grid-cols-1 md:grid-cols-2 gap-4">';
+        gameState.groups.forEach(group => {
+            html += `
+            <div class="bg-black/30 p-3 rounded border border-white/10">
+                <h3 class="font-bold text-yellow-500 mb-2">GRUP ${group.letter}</h3>
+                <table>
+                    <thead><tr><th>TIM</th><th>P</th><th>GD</th><th>PTS</th></tr></thead>
+                    <tbody>
+                        ${group.teams.sort((a,b) => b.pts - a.pts || (b.gf-b.ga) - (a.gf-a.ga)).map(t => `
+                            <tr class="${t.name === gameState.playerTeam ? 'highlight' : ''}">
+                                <td class="text-left">${t.name}</td><td>${t.p}</td><td>${t.gf - t.ga}</td><td>${t.pts}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        });
+        html += '</div>';
+    } else if (gameState.phase !== 'WINNER') {
+        html = `<h2 class="text-2xl font-bold mb-4 text-center uppercase">FASE GUGUR: ${gameState.phase}</h2>`;
+        const matches = gameState.knockout[gameState.phase.toLowerCase()];
+        html += '<div class="flex flex-col gap-4 items-center">';
+        matches.forEach(m => {
+            html += `
+            <div class="bg-white/10 p-4 rounded-xl w-full max-w-md flex justify-between items-center ucl-border">
+                <span class="${m.home === gameState.playerTeam ? 'highlight' : ''}">${m.home}</span>
+                <span class="text-2xl font-black">${m.scoreH !== null ? m.scoreH + ' - ' + m.scoreV : 'VS'}</span>
+                <span class="${m.away === gameState.playerTeam ? 'highlight' : ''}">${m.away}</span>
+            </div>`;
+        });
+        html += '</div>';
+    } else {
+        html = `<div class="text-center py-10"><h2 class="text-4xl font-bold text-yellow-500 mb-4">🏆 CHAMPIONS!</h2><p>Selamat, ${gameState.playerTeam} telah memenangkan turnamen!</p></div>`;
+    }
+    container.innerHTML = html;
+}
+
+/** * THREE.JS ENGINE 
+ */
+let scene, camera, renderer, ball, player, opponent;
+let isPlaying = false;
+let moveDir = new THREE.Vector2(0, 0);
+let gameTime = 45;
+let score = { h: 0, v: 0 };
+let clock = new THREE.Clock();
+let ballVelocity = new THREE.Vector3();
+let aiVelocity = new THREE.Vector3();
+let playerVelocity = new THREE.Vector3();
+let aiShootCooldown = 0;
+let disableDribbleFrames = 0;
+
+function init3D() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000428);
+    scene.fog = new THREE.Fog(0x000428, 20, 100);
+
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 15, 20);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0x4040ff, 0.6));
+    const spot = new THREE.SpotLight(0xffffff, 1.2);
+    spot.position.set(0, 40, 0);
+    spot.castShadow = true;
+    scene.add(spot);
+
+    const pitch = new THREE.Mesh(new THREE.PlaneGeometry(40, 60), new THREE.MeshPhongMaterial({ color: 0x1a472a }));
+    pitch.rotation.x = -Math.PI / 2;
+    pitch.receiveShadow = true;
+    scene.add(pitch);
+
+    const createLine = (w, h, x, z) => {
+        const l = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+        l.rotation.x = -Math.PI / 2; l.position.set(x, 0.02, z); scene.add(l);
+    };
+    createLine(40, 0.3, 0, 0); 
+    createLine(15, 0.3, 0, 25); 
+    createLine(15, 0.3, 0, -25); 
+
+    const createGoal = (z) => {
+        const g = new THREE.Group();
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4, 0.3), mat); p1.position.set(-5, 2, 0);
+        const p2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4, 0.3), mat); p2.position.set(5, 2, 0);
+        const p3 = new THREE.Mesh(new THREE.BoxGeometry(10.3, 0.3, 0.3), mat); p3.position.set(0, 4, 0);
+        g.add(p1, p2, p3); g.position.z = z; scene.add(g);
+    };
+    createGoal(-30); createGoal(30);
+
+    const createChar = (col) => {
+        const g = new THREE.Group();
+        const b = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2, 0.6), new THREE.MeshPhongMaterial({ color: col }));
+        b.position.y = 1; b.castShadow = true;
+        const h = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshPhongMaterial({ color: 0xffdbac }));
+        h.position.y = 2.5; g.add(b, h); scene.add(g); return g;
+    };
+    player = createChar(0x0033ff);
+    opponent = createChar(0xcc0000);
+
+    ball = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 16), new THREE.MeshPhongMaterial({ color: 0xffffff }));
+    ball.castShadow = true; scene.add(ball);
+
+    resetPositions();
+    animate();
+}
+
+function resetPositions() {
+    player.position.set(0, 0, 10);
+    player.rotation.y = 0;
+    opponent.position.set(0, 0, -10);
+    opponent.rotation.y = Math.PI;
+    aiVelocity.set(0, 0, 0);
+    playerVelocity.set(0, 0, 0);
+    moveDir.set(0, 0); 
+    ball.position.set(0, 0.45, 0);
+    ballVelocity.set(0, 0, 0);
+    aiShootCooldown = 0;
+    disableDribbleFrames = 0;
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+
+    if (isPlaying) {
+        updatePlayer(dt);
+        updateAI(dt);
+        updateBall(dt);
+        checkGoals();
+        
+        const targetCamPos = new THREE.Vector3(
+            player.position.x * 0.8, 
+            12, 
+            player.position.z + 15
+        );
+        camera.position.lerp(targetCamPos, 0.08);
+
+        const lookTarget = new THREE.Vector3().lerpVectors(player.position, ball.position, 0.4);
+        camera.lookAt(lookTarget.x, 1, lookTarget.z);
+
+        gameTime -= dt;
+        if (gameTime <= 0) endGame();
+        document.getElementById('game-timer').innerText = `00:${Math.max(0, Math.ceil(gameTime)).toString().padStart(2, '0')}`;
+    }
+    renderer.render(scene, camera);
+}
+
+function updatePlayer(dt) {
+    const targetVel = new THREE.Vector3(moveDir.x * 0.25, 0, moveDir.y * 0.25);
+    playerVelocity.lerp(targetVel, 0.2);
+    player.position.add(playerVelocity);
+
+    if (moveDir.length() > 0.1) {
+        const angle = Math.atan2(moveDir.x, moveDir.y);
+        player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, angle, 0.2);
+    }
+
+    player.position.x = Math.max(-19, Math.min(19, player.position.x));
+    player.position.z = Math.max(-29, Math.min(29, player.position.z));
+
+    if (disableDribbleFrames > 0) {
+        disableDribbleFrames--;
+        return;
+    }
+
+    const distBall = player.position.distanceTo(ball.position);
+    if (distBall < 2.0) {
+        const ballDir = new THREE.Vector3().subVectors(ball.position, player.position).normalize();
+        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion);
+        const dot = ballDir.dot(forward);
+
+        if (distBall < 1.3) {
+            const idealPos = player.position.clone().add(forward.multiplyScalar(1.2));
+            ball.position.lerp(idealPos, 0.3);
+            ballVelocity.copy(playerVelocity).multiplyScalar(0.9);
+        } else if (dot > 0.4) {
+            ballVelocity.add(forward.multiplyScalar(0.06));
+        }
+    }
+}
+
+function updateAI(dt) {
+    const aiPos = opponent.position;
+    const ballPos = ball.position;
+    const distBall = aiPos.distanceTo(ballPos);
+    const goalTarget = new THREE.Vector3(0, 0, 30); 
+    
+    if (aiShootCooldown > 0) aiShootCooldown -= dt;
+
+    let target = new THREE.Vector3();
+    let desiredSpeed = 0.16;
+
+    if (ballPos.z > 0 && distBall > 12) {
+        target.set(ballPos.x * 0.7, 0, -15);
+        desiredSpeed = 0.12;
+    } 
+    else if (distBall > 2.5) { 
+        const behindBall = new THREE.Vector3().subVectors(ballPos, goalTarget).normalize();
+        target.copy(ballPos).add(behindBall.multiplyScalar(2.0)); 
+    } 
+    else {
+        target.copy(goalTarget);
+        desiredSpeed = 0.19;
+        if (aiPos.z > 12 && aiShootCooldown <= 0) {
+            shootBall(opponent, new THREE.Vector3((Math.random()-0.5)*8, 0, 30), 1.0);
+            aiShootCooldown = 3;
+        }
+    }
+
+    const direction = new THREE.Vector3().subVectors(target, aiPos).normalize();
+    const desiredVel = direction.multiplyScalar(desiredSpeed);
+    aiVelocity.lerp(desiredVel, 0.1); 
+    aiPos.add(aiVelocity);
+
+    if (distBall < 1.6) {
+        const pushForce = new THREE.Vector3().subVectors(goalTarget, aiPos).normalize();
+        ballVelocity.add(pushForce.multiplyScalar(0.04));
+    }
+
+    aiPos.x = Math.max(-19, Math.min(19, aiPos.x));
+    aiPos.z = Math.max(-29, Math.min(29, aiPos.z));
+}
+
+function updateBall(dt) {
+    ballVelocity.multiplyScalar(0.97); 
+    ball.position.add(ballVelocity);
+    
+    if (Math.abs(ball.position.x) > 19.5) {
+        ballVelocity.x *= -0.7;
+        ball.position.x = Math.sign(ball.position.x) * 19.4;
+    }
+    if (Math.abs(ball.position.z) > 29.5 && Math.abs(ball.position.x) > 5.5) {
+        ballVelocity.z *= -0.7;
+        ball.position.z = Math.sign(ball.position.z) * 29.4;
+    }
+    
+    ball.rotation.x += ballVelocity.z * 0.5;
+    ball.rotation.z -= ballVelocity.x * 0.5;
+}
+
+function shootBall(from, targetPos, power = 1.0) {
+    const dir = new THREE.Vector3().subVectors(targetPos, from.position).normalize();
+    ballVelocity.copy(dir.multiplyScalar(power));
+    ballVelocity.y = 0.12; 
+    setTimeout(() => { if(ball) ball.position.y = 0.45; }, 500);
+}
+
+function checkGoals() {
+    if (ball.position.z < -30) { score.h++; resetPositions(); updateScoreUI(); showGoalMsg("GOAL!"); }
+    else if (ball.position.z > 30) { score.v++; resetPositions(); updateScoreUI(); showGoalMsg("KEBOBOLAN!"); }
+}
+
+function showGoalMsg(txt) {
+    const timer = document.getElementById('game-timer');
+    const old = timer.innerText;
+    timer.innerText = txt;
+    setTimeout(() => { if(timer.innerText === txt) timer.innerText = old; }, 1500);
+}
+
+function updateScoreUI() {
+    document.getElementById('score-a').innerText = score.h;
+    document.getElementById('score-b').innerText = score.v;
+}
+
+function setupInput() {
+    const knob = document.getElementById('joystick-knob');
+    const container = document.getElementById('joystick-container');
+    const shootBtn = document.getElementById('shoot-btn');
+    let active = false;
+
+    const move = (e) => {
+        if (!active) return;
+        const rect = container.getBoundingClientRect();
+        const t = e.touches ? e.touches[0] : e;
+        const x = t.clientX - rect.left - rect.width/2;
+        const y = t.clientY - rect.top - rect.height/2;
+        const d = Math.min(50, Math.sqrt(x*x+y*y));
+        const angle = Math.atan2(y, x);
+        knob.style.transform = `translate(${Math.cos(angle)*d}px, ${Math.sin(angle)*d}px)`;
+        moveDir.set(Math.cos(angle)*(d/50), Math.sin(angle)*(d/50));
+    };
+
+    container.onmousedown = container.ontouchstart = (e) => {
+        active = true;
+        if(e.cancelable) e.preventDefault();
+    };
+
+    window.addEventListener('mousemove', move);
+    window.addEventListener('touchmove', move, { passive: false });
+    
+    const stopInput = () => { 
+        active = false; 
+        moveDir.set(0,0); 
+        knob.style.transform = 'translate(0,0)'; 
+    };
+
+    window.addEventListener('mouseup', stopInput);
+    window.addEventListener('touchend', stopInput);
+
+    const handleShoot = (e) => {
+        if (e && e.cancelable) { e.preventDefault(); e.stopPropagation(); }
+        if (!isPlaying) return;
+        const dist = player.position.distanceTo(ball.position);
+        if (dist < 3.8) {
+            disableDribbleFrames = 18; 
+            const power = 1.2 + (playerVelocity.length() * 0.9);
+            shootBall(player, new THREE.Vector3((Math.random()-0.5)*6, 0, -32), power);
+        }
+    };
+
+    shootBtn.addEventListener('touchstart', handleShoot, { passive: false });
+    shootBtn.addEventListener('mousedown', handleShoot);
+}
+
+/** * TURNAMEN FLOW 
+ */
+function processResults(pH, pV, opp) {
+    if (gameState.phase === 'GROUP') {
+        const group = gameState.groups.find(g => g.teams.some(t => t.name === gameState.playerTeam));
+        const pT = group.teams.find(t => t.name === gameState.playerTeam);
+        const oT = group.teams.find(t => t.name === opp);
+        pT.p++; oT.p++; pT.gf += pH; pT.ga += pV; oT.gf += pV; oT.ga += pH;
+        if (pH > pV) { pT.pts += 3; pT.w++; oT.l++; }
+        else if (pV > pH) { oT.pts += 3; oT.w++; pT.l++; }
+        else { pT.pts++; oT.pts++; pT.d++; oT.d++; }
+        
+        group.teams.filter(t => t.name !== pT.name && t.name !== oT.name).forEach(t => {
+            if (t.p < 3) {
+                t.p++; 
+                if(Math.random() > 0.5) { t.pts += 3; t.w++; t.gf += 1; } else { t.pts++; t.d++; }
+            }
+        });
+        if (pT.p >= 3) advanceToKnockout();
+    } else {
+        const phaseKey = gameState.phase.toLowerCase();
+        const matches = gameState.knockout[phaseKey];
+        const m = matches.find(x => x.home === gameState.playerTeam || x.away === gameState.playerTeam);
+        if (m) {
+            m.scoreH = pH; m.scoreV = pV;
+            if (pH >= pV) {
+                if (gameState.phase === 'QUARTER') advancePhase('SEMI');
+                else if (gameState.phase === 'SEMI') advancePhase('FINAL');
+                else gameState.phase = 'WINNER';
+            } else {
+                alert("Turnamen Berakhir! Kamu kalah di fase " + gameState.phase); 
+                localStorage.removeItem('ucl_tournament_save'); 
+                location.reload();
+            }
+        }
+    }
+    saveGame();
+}
+
+function advanceToKnockout() {
+    gameState.phase = 'QUARTER';
+    const top = [];
+    gameState.groups.forEach(g => {
+        const s = [...g.teams].sort((a,b) => b.pts - a.pts || (b.gf-b.ga) - (a.gf-a.ga));
+        top.push(s[0].name, s[1].name);
+    });
+    const shuf = top.sort(() => Math.random() - 0.5);
+    gameState.knockout.quarter = [];
+    for(let i=0; i<4; i++) gameState.knockout.quarter.push({ home: shuf[i*2], away: shuf[i*2+1], scoreH: null, scoreV: null });
+}
+
+function advancePhase(next) {
+    const prevPhase = gameState.phase.toLowerCase();
+    const wins = gameState.knockout[prevPhase].map(m => {
+        if (m.scoreH === null) return m.home;
+        return m.scoreH >= m.scoreV ? m.home : m.away;
+    });
+    gameState.phase = next;
+    gameState.knockout[next.toLowerCase()] = [];
+    for(let i=0; i<wins.length/2; i++) {
+        gameState.knockout[next.toLowerCase()].push({ home: wins[i*2], away: wins[i*2+1], scoreH: null, scoreV: null });
+    }
+}
+
+document.getElementById('start-btn').onclick = () => {
+    document.getElementById('main-menu').classList.add('hidden');
+    document.getElementById('tournament-ui').classList.remove('hidden');
+    initTournament(); renderTournamentUI();
+};
+
+document.getElementById('play-match-btn').onclick = () => {
+    // Reset state kontrol secara total dan paksa
+    isPlaying = false;
+    moveDir.set(0, 0);
+    playerVelocity.set(0, 0, 0);
+    aiVelocity.set(0, 0, 0);
+    
+    document.getElementById('tournament-ui').classList.add('hidden');
+    document.getElementById('game-hud').classList.remove('hidden');
+    document.getElementById('mobile-controls').classList.remove('hidden');
+    
+    let opp = "AI";
+    try {
+        if (gameState.phase === 'GROUP') {
+            const g = gameState.groups.find(x => x.teams.some(t => t.name === gameState.playerTeam));
+            opp = g.teams.find(t => t.name !== gameState.playerTeam && t.p < 3)?.name || "AI";
+        } else {
+            const phaseKey = gameState.phase.toLowerCase();
+            const matches = gameState.knockout[phaseKey];
+            if (matches && matches.length > 0) {
+                const m = matches.find(x => x.home === gameState.playerTeam || x.away === gameState.playerTeam);
+                if (m) opp = m.home === gameState.playerTeam ? m.away : m.home;
+            }
+        }
+    } catch(e) { console.error("Error finding opponent", e); }
+    
+    document.getElementById('team-b-name').innerText = opp;
+    score = { h: 0, v: 0 }; 
+    updateScoreUI(); 
+    gameTime = 45; 
+    resetPositions();
+    
+    // Aktifkan permainan setelah semua reset selesai dengan delay sedikit lebih lama untuk keamanan
+    setTimeout(() => { isPlaying = true; }, 200);
+};
+
+function endGame() {
+    isPlaying = false;
+    document.getElementById('game-hud').classList.add('hidden');
+    document.getElementById('mobile-controls').classList.add('hidden');
+    document.getElementById('match-end-overlay').classList.remove('hidden');
+    const opp = document.getElementById('team-b-name').innerText;
+    document.getElementById('match-result-text').innerText = `${gameState.playerTeam} ${score.h} - ${score.v} ${opp}`;
+    processResults(score.h, score.v, opp);
+}
+
+document.getElementById('back-to-tournament-btn').onclick = () => {
+    document.getElementById('match-end-overlay').classList.add('hidden');
+    document.getElementById('tournament-ui').classList.remove('hidden');
+    renderTournamentUI();
+};
+
+document.getElementById('reset-btn').onclick = () => { 
+    if(confirm("Hapus semua progres?")) {
+        localStorage.removeItem('ucl_tournament_save'); 
+        location.reload(); 
+    }
+};
+
+window.onload = () => { init3D(); setupInput(); };
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>
+
